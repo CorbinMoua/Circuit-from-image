@@ -10,3 +10,71 @@
   }
 }
 
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/lovable_demo?schema=public"
+NEXTAUTH_SECRET="changeme-dev-only"
+NEXTAUTH_URL="http://localhost:3000"
+GITHUB_ID=""
+GITHUB_SECRET=""
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1) install
+if [ -f "pnpm-lock.yaml" ]; then
+  corepack enable || true
+  pnpm i
+elif [ -f "yarn.lock" ]; then
+  yarn
+else
+  npm i
+fi
+
+# 2) ensure .env
+if [ ! -f ".env" ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example"
+fi
+
+# 3) dev DB (optional): spin up Postgres if docker-compose exists
+if [ -f "docker-compose.yml" ]; then
+  docker compose up -d
+fi
+
+# 4) migrate + seed + run
+npm run db:migrate
+npm run db:seed
+npm run dev
+
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: lovable_demo
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U postgres" 
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lovable_demo?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: corepack enable || true
+      - run: |
+          if [ -f pnpm-lock.yaml ]; then corepack prepare pnpm@latest --activate && pnpm i; \
+          elif [ -f yarn.lock ]; then yarn; else npm i; fi
+      - run: npx prisma migrate deploy
+      - run: node -e "try{require('tsx')}catch(e){process.exit(0)}"
+      - run: npm run db:seed || true
+      - run: npm test
+
